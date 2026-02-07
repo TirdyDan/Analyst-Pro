@@ -1,94 +1,79 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import os
-from datetime import datetime
+import zipfile
+import io
 
 # --- UI DESIGN (Schwarz-Weiß) ---
 st.set_page_config(page_title="Analyst Pro", layout="centered")
 
 st.markdown("""
     <style>
-    /* Hintergrund und Textfarben */
     .main { background-color: #ffffff; color: #000000; }
-    h1, h2, h3 { color: #000000 !important; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
-    
-    /* Buttons schwarz weiß */
+    h1, h2, h3 { color: #000000 !important; font-family: 'Helvetica Neue', Arial, sans-serif; }
     .stButton>button {
-        background-color: #000000;
-        color: #ffffff;
-        border-radius: 0px;
-        border: 1px solid #000000;
-        width: 100%;
+        background-color: #000000; color: #ffffff; border-radius: 0px;
+        border: 1px solid #000000; width: 100%; height: 3em; font-weight: bold;
     }
-    .stButton>button:hover {
-        background-color: #ffffff;
-        color: #000000;
-    }
-    
-    /* Input Felder */
-    .stTextInput>div>div>input {
-        border-radius: 0px;
-        border: 1px solid #000000;
-    }
+    .stButton>button:hover { background-color: #ffffff; color: #000000; }
+    .stTextInput>div>div>input { border-radius: 0px; border: 1px solid #000000; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- APP LOGIK ---
-st.title("FINANCIAL ANALYST PRO")
+st.title("ANALYST PRO")
 st.write("---")
 
-# Eingabemaske
-col1, col2 = st.columns(2)
-with col1:
-    ticker = st.text_input("TICKER SYMBOL", placeholder="z.B. AAPL").upper()
-with col2:
-    # Standardmäßig der aktuelle Ordner
-    save_path = st.text_input("SPEICHERORT (PFAD)", value=os.getcwd())
+ticker = st.text_input("TICKER SYMBOL EINGEBEN (z.B. AAPL, MSFT, SAP.DE)", "").upper()
 
-# Auswahl der Datenfelder
-st.subheader("NOTWENDIGE DATENFELDER")
-include_balance = st.checkbox("Bilanz (Balance Sheet)", value=True)
-include_income = st.checkbox("Gewinnrechnung (Income Statement)", value=True)
-include_cashflow = st.checkbox("Cashflow-Rechnung", value=True)
-include_ratios = st.checkbox("Wichtige Kennzahlen (KGV, ROE, etc.)", value=True)
+if ticker:
+    try:
+        with st.spinner('Daten werden geladen...'):
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            
+            # Kennzahlen-Vorschau
+            col1, col2, col3 = st.columns(3)
+            col1.metric("P/E (KGV)", info.get('trailingPE', 'N/A'))
+            col2.metric("ROE", f"{info.get('returnOnEquity', 0)*100:.2f}%")
+            col3.metric("DIVIDENDE", f"{info.get('dividendYield', 0)*100:.2f}%")
 
-if st.button("DATEN EXTRAHIEREN & SPEICHERN"):
-    if ticker:
-        try:
-            with st.spinner('Verarbeite...'):
-                stock = yf.Ticker(ticker)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-                folder_name = os.path.join(save_path, f"{ticker}_{timestamp}")
+            # --- ZIP ERSTELLUNG (IM SPEICHER) ---
+            # Wir erstellen die Dateien im Arbeitsspeicher, nicht auf der Festplatte
+            zip_buffer = io.BytesIO()
+            
+            with zipfile.ZipFile(zip_buffer, "w") as zf:
+                # 1. Bilanz
+                if not stock.balance_sheet.empty:
+                    zf.writestr(f"{ticker}_balance_sheet.csv", stock.balance_sheet.to_csv())
                 
-                # Ordner erstellen
-                if not os.path.exists(folder_name):
-                    os.makedirs(folder_name)
+                # 2. Gewinnrechnung
+                if not stock.financials.empty:
+                    zf.writestr(f"{ticker}_income_statement.csv", stock.financials.to_csv())
                 
-                # Daten sammeln und speichern
-                results = []
-                if include_balance:
-                    stock.balance_sheet.to_csv(f"{folder_name}/balance_sheet.csv")
-                    results.append("Bilanz")
-                if include_income:
-                    stock.financials.to_csv(f"{folder_name}/income.csv")
-                    results.append("Gewinnrechnung")
-                if include_cashflow:
-                    stock.cashflow.to_csv(f"{folder_name}/cashflow.csv")
-                    results.append("Cashflow")
+                # 3. Cashflow
+                if not stock.cashflow.empty:
+                    zf.writestr(f"{ticker}_cashflow.csv", stock.cashflow.to_csv())
                 
-                if include_ratios:
-                    info = stock.info
-                    with open(f"{folder_name}/ratios.txt", "w") as f:
-                        f.write(f"KGV: {info.get('trailingPE')}\nROE: {info.get('returnOnEquity')}\nYield: {info.get('dividendYield')}")
-                    results.append("Kennzahlen")
+                # 4. Zusammenfassung (Summary TXT)
+                summary_text = f"Analyse für {ticker}\n" + "-"*20 + \
+                               f"\nName: {info.get('longName')}" + \
+                               f"\nKGV: {info.get('trailingPE')}" + \
+                               f"\nBörsenwert: {info.get('marketCap')}"
+                zf.writestr(f"{ticker}_summary.txt", summary_text)
 
-                st.success(f"ERFOLG: {', '.join(results)} gespeichert in:")
-                st.code(folder_name)
-        except Exception as e:
-            st.error(f"FEHLER: {str(e)}")
-    else:
-        st.warning("BITTE TICKER EINGEBEN")
+            st.write("---")
+            st.success("Alle Datenfelder wurden erfolgreich generiert.")
+            
+            # Der Download-Button für das ZIP
+            st.download_button(
+                label="📥 DATEN-PAKET (ZIP) HERUNTERLADEN",
+                data=zip_buffer.getvalue(),
+                file_name=f"{ticker}_Financial_Data.zip",
+                mime="application/zip"
+            )
+
+    except Exception as e:
+        st.error(f"Fehler: {e}")
 
 st.write("---")
-st.caption("Minimalist Analysis Tool v1.0 | Black & White Edition")
+st.caption("v1.2 | Local Export Edition")

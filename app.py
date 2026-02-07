@@ -56,10 +56,10 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("Financial Analyst Pro")
+st.title("Analyst Pro")
 st.write("")
 
-ticker = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. NVDA, TSLA, SAP.DE").upper()
+ticker = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. AAPL, NVDA, TSLA, SAP.DE").upper()
 
 if ticker:
     try:
@@ -138,4 +138,4 @@ Generiert am: {pd.Timestamp.now()}
         st.error(f"System-Fehler: {e}")
 
 st.write("---")
-st.caption("Premium Financial Tool | Version 2.0 Gold Edition")
+st.caption("TirdyDan Tools | Version 2.0 Gold Edition")

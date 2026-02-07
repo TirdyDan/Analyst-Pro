@@ -5,7 +5,7 @@ import zipfile
 import io
 
 # --- UI DESIGN (Anthrazit & Gold) ---
-st.set_page_config(page_title="Analyst Pro Gold", layout="centered")
+st.set_page_config(page_title="Analyst Pro", layout="centered")
 
 st.markdown("""
     <style>
@@ -70,7 +70,7 @@ if ticker:
 
             if files_added > 0:
                 st.success(f"✓ {files_added} Finanztabellen wurden erfolgreich generiert.")
-                st.write("Lade das Paket herunter, um die Analyse in Claude zu starten.")
+                st.write("Lade das Paket herunter, um die Analyse in Gemini, ChatGPT oder Claude zu starten. Es wird dringend empfohlen, für die Analyse die jeweiligen Thinkingmodelle zu verweden. Zudem gilt es, jede Analyse kritisch zu betrachten und zu hinterfragen. Benutzung auf eigenen Gefahr.")
                 
                 # Download Button
                 st.download_button(

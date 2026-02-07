@@ -9,13 +9,7 @@ st.set_page_config(page_title="Analyst Pro Gold", layout="centered")
 
 st.markdown("""
     <style>
-    /* Hintergrund auf Anthrazit */
-    .stApp {
-        background-color: #1e1e1e;
-        color: #ffffff;
-    }
-    
-    /* Hauptüberschrift in GOLD */
+    .stApp { background-color: #1e1e1e; color: #ffffff; }
     h1 {
         color: #FFD700 !important;
         font-family: 'Georgia', serif;
@@ -25,117 +19,71 @@ st.markdown("""
         border-bottom: 2px solid #FFD700;
         padding-bottom: 10px;
     }
-    
-    h2, h3 {
-        color: #FFD700 !important;
-    }
-
-    /* Buttons Schwarz/Gold */
+    h2, h3 { color: #FFD700 !important; }
     .stButton>button {
-        background-color: #FFD700;
-        color: #000000;
-        border-radius: 5px;
-        border: none;
-        width: 100%;
-        font-weight: bold;
-        height: 3.5em;
-        transition: 0.3s;
+        background-color: #FFD700; color: #000000;
+        border-radius: 5px; border: none; width: 100%;
+        font-weight: bold; height: 3.5em;
     }
-    .stButton>button:hover {
-        background-color: #e6c200;
-        color: #000000;
-        box-shadow: 0px 0px 15px rgba(255, 215, 0, 0.4);
-    }
-    
-    /* Eingabefelder */
-    input {
-        background-color: #2d2d2d !important;
-        color: white !important;
-        border: 1px solid #FFD700 !important;
-    }
+    .stButton>button:hover { background-color: #e6c200; box-shadow: 0px 0px 15px rgba(255, 215, 0, 0.4); }
+    input { background-color: #2d2d2d !important; color: white !important; border: 1px solid #FFD700 !important; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("Analyst Pro")
 st.write("")
 
-ticker = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. AAPL, NVDA, TSLA, SAP.DE").upper()
+ticker = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. NVDA, MSFT, SAP.DE").upper()
 
 if ticker:
     try:
-        with st.spinner('Extrahiere Finanzdaten...'):
+        with st.spinner('Extrahiere reine Finanzdaten...'):
             stock = yf.Ticker(ticker)
             
-            # Daten explizit abrufen (Force Download)
+            # Tabellen abrufen
             balance = stock.balance_sheet
             income = stock.financials
             cashflow = stock.cashflow
-            info = stock.info
-
-            # Kurze Info-Kacheln für die App-Ansicht
-            st.subheader(f"Snapshot: {info.get('longName', ticker)}")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("KGV", info.get('trailingPE', 'N/A'))
-            c2.metric("Marge", f"{info.get('operatingMargins', 0)*100:.1f}%")
-            c3.metric("Preis/Buch", info.get('priceToBook', 'N/A'))
-
-            # --- ZIP ERSTELLUNG ---
+            
+            # Kurze Live-Vorschau in der App (nur zur Kontrolle)
+            st.subheader(f"Datenstatus für {ticker}")
+            
+            # --- ZIP ERSTELLUNG (Ohne TXT Datei) ---
             zip_buffer = io.BytesIO()
             files_added = 0
             
             with zipfile.ZipFile(zip_buffer, "w") as zf:
-                # 1. Bilanz hinzufügen
+                # 1. Bilanz
                 if not balance.empty:
                     zf.writestr(f"{ticker}_Bilanz.csv", balance.to_csv())
                     files_added += 1
                 
-                # 2. Gewinnrechnung hinzufügen
+                # 2. Gewinnrechnung (Income Statement)
                 if not income.empty:
-                    zf.writestr(f"{ticker}_GuV.csv", income.to_csv())
+                    zf.writestr(f"{ticker}_Erfolgsrechnung.csv", income.to_csv())
                     files_added += 1
                 
-                # 3. Cashflow hinzufügen
+                # 3. Cashflow
                 if not cashflow.empty:
                     zf.writestr(f"{ticker}_Cashflow.csv", cashflow.to_csv())
                     files_added += 1
-                
-                # 4. Erweiterte Summary TXT
-                summary_content = f"""FINANZ-ANALYSE REPORT: {ticker}
-========================================
-Name: {info.get('longName')}
-Sektor: {info.get('sector')}
-Industrie: {info.get('industry')}
 
-WICHTIGE KENNZAHLEN:
--------------------
-KGV (Trailing): {info.get('trailingPE')}
-Forward KGV: {info.get('forwardPE')}
-Eigenkapitalrendite (ROE): {info.get('returnOnEquity')}
-Dividendenrendite: {info.get('dividendYield', 0)*100:.2f}%
-Verschuldungsgrad (D/E): {info.get('debtToEquity')}
-Cashbestand: {info.get('totalCash')}
--------------------
-Generiert am: {pd.Timestamp.now()}
-"""
-                zf.writestr(f"{ticker}_Zusammenfassung.txt", summary_content)
-                files_added += 1
-
-            if files_added > 1:
-                st.write("---")
-                st.success(f"Analyse abgeschlossen. {files_added} Dateien sind bereit.")
+            if files_added > 0:
+                st.success(f"✓ {files_added} Finanztabellen wurden erfolgreich generiert.")
+                st.write("Lade das Paket herunter, um die Analyse in Claude zu starten.")
                 
                 # Download Button
                 st.download_button(
-                    label="🏆 JETZT DATEN-PAKET (ZIP) HERUNTERLADEN",
+                    label="🏆 DATEN-PAKET (ZIP) HERUNTERLADEN",
                     data=zip_buffer.getvalue(),
-                    file_name=f"{ticker}_Gold_Report.zip",
+                    file_name=f"{ticker}_Financial_Tables.zip",
                     mime="application/zip"
                 )
             else:
-                st.error("Yahoo Finance hat für diesen Ticker keine Tabellen-Daten geliefert. Versuche ein anderes Symbol.")
+                st.warning("Für diesen Ticker konnten keine Tabellen gefunden werden. Bitte prüfe das Symbol.")
 
     except Exception as e:
-        st.error(f"System-Fehler: {e}")
+        st.error(f"Fehler beim Datenabruf: {e}")
 
 st.write("---")
-st.caption("TirdyDan Tools | Version 2.0 Gold Edition")
+st.caption("TirdyDan Tools | Pure Gold Edition")

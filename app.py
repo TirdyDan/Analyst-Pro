@@ -229,7 +229,8 @@ if ticker_input:
             i_map = {"1T":"5m","1W":"15m","1M":"1d","6M":"1d","1J":"1d","5J":"1wk","Max":"1mo"}
 
             # Sub-Select für den Chart-Zeitraum
-            hist_chart = yf.download(ticker_input, period=p_map[period], interval=i_map[period], progress=False)
+            # FIX: Ticker.history statt download verwenden, um MultiIndex-Probleme (einzelner Punkt) zu vermeiden
+            hist_chart = yf.Ticker(ticker_input).history(period=p_map[period], interval=i_map[period])
 
             fig = go.Figure(go.Scatter(x=hist_chart.index, y=hist_chart['Close'], line=dict(color='#FFD700'), fill='tozeroy', fillcolor='rgba(255, 215, 0, 0.1)'))
             fig.update_yaxes(range=[hist_chart['Close'].min()*0.95, hist_chart['Close'].max()*1.3])
@@ -302,7 +303,7 @@ if ticker_input:
                 st.write(
                     f"- Kontogröße = **{acc_eur:.2f} EUR**\n"
                     f"- Risiko pro Trade = **{risk_p:.2f}%**\n"
-                    f"- Risikobudget = Kontogröße × Risiko% = **{risk_eur:.2f} EUR**  "
+                    f"- Risikobudget = Kontogröße × Risiko% = **{risk_eur:.2f} EUR** "
                     f"({caption_with_wiki('Risikomanagement')})"
                 )
 

@@ -5,69 +5,65 @@ import zipfile
 import io
 import requests
 
-# --- GLOBALE DATEN-FUNKTION (Update: Jetzt mit Asien-Fokus) ---
+# --- STABILE GLOBAL-DATEN FUNKTION (GITHUB RAW CSVs) ---
 @st.cache_data(ttl=86400)
-def get_global_tickers():
-    combined_options = []
-    ticker_map = {}
+def get_ares_global_database():
+    all_tickers = {}
     
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    
-    # Erweiterte Liste der Indizes für maximale Abdeckung
+    # Liste der stabilen GitHub-Quellen
     sources = [
-        {"name": "S&P 500 (USA)", "url": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", "suffix": ""},
-        {"name": "DAX (DE)", "url": "https://en.wikipedia.org/wiki/DAX", "suffix": ".DE"},
-        {"name": "ATX (AT)", "url": "https://en.wikipedia.org/wiki/Austrian_Traded_Index", "suffix": ".VI"},
-        {"name": "STOXX 600 (EU)", "url": "https://en.wikipedia.org/wiki/STOXX_Europe_600", "suffix": ""},
-        {"name": "Nikkei 225 (JP)", "url": "https://en.wikipedia.org/wiki/Nikkei_225", "suffix": ".T"},
-        {"name": "KOSPI 200 (KR)", "url": "https://en.wikipedia.org/wiki/KOSPI_200", "suffix": ".KS"},
-        {"name": "Hang Seng (HK)", "url": "https://en.wikipedia.org/wiki/Hang_Seng_Index", "suffix": ".HK"},
-        {"name": "SSE 50 (CN)", "url": "https://en.wikipedia.org/wiki/SSE_50_Index", "suffix": ".SS"}
+        {
+            "name": "S&P 500 (USA)",
+            "url": "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv",
+            "symbol_col": "Symbol", "name_col": "Name", "suffix": ""
+        },
+        {
+            "name": "STOXX 600 (Europa)",
+            "url": "https://raw.githubusercontent.com/pmo-financial-analysis/stoxx600/main/stoxx600_constituents.csv",
+            "symbol_col": "Ticker", "name_col": "Name", "suffix": "" # Suffixe sind hier meist schon drin
+        },
+        {
+            "name": "DAX (Deutschland)",
+            "url": "https://raw.githubusercontent.com/datasets/dax-queries/master/data/dax-constituents.csv",
+            "symbol_col": "Symbol", "name_col": "Name", "suffix": ".DE"
+        },
+        {
+            "name": "Nikkei 225 (Japan)",
+            "url": "https://raw.githubusercontent.com/datasets/nikkei-225/master/data/constituents.csv",
+            "symbol_col": "Symbol", "name_col": "Name", "suffix": ".T"
+        }
     ]
 
     for source in sources:
         try:
-            response = requests.get(source["url"], headers=headers, timeout=10)
-            tables = pd.read_html(response.text)
-            
-            # Suche nach der Tabelle, die Symbole enthält
-            df = None
-            for t in tables:
-                cols = [str(c).lower() for c in t.columns]
-                if any(x in cols for x in ['symbol', 'ticker', 'code']):
-                    df = t
-                    break
-            
-            if df is not None:
-                # Spaltennamen identifizieren
-                cols_lower = [str(c).lower() for c in df.columns]
-                sym_idx = next(i for i, c in enumerate(cols_lower) if any(x in c for x in ['symbol', 'ticker', 'code']))
-                name_idx = next(i for i, c in enumerate(cols_lower) if any(x in c for x in ['security', 'company', 'name', 'constituent']))
+            df = pd.read_csv(source["url"])
+            for _, row in df.iterrows():
+                raw_sym = str(row[source["symbol_col"]])
+                # Yahoo Suffix Logik
+                clean_sym = raw_sym if ("." in raw_sym or source["suffix"] == "") else f"{raw_sym}{source['suffix']}"
                 
-                for _, row in df.iterrows():
-                    name = str(row.iloc[name_idx])
-                    sym = str(row.iloc[sym_idx]).split()[0] # Falls Leerzeichen im Ticker sind
-                    
-                    # Bereinigung für Yahoo Finance
-                    sym = sym.replace('.', '-') 
-                    
-                    # Suffix-Logik
-                    if source["suffix"] and not sym.endswith(source["suffix"]):
-                        # Spezialfall China/HK: Manchmal sind Ticker dort rein numerisch
-                        full_ticker = f"{sym}{source['suffix']}"
-                    else:
-                        full_ticker = sym
-                    
-                    # Formatierung für die Liste
-                    display_name = f"{name} ({source['name']}) - {full_ticker}"
-                    combined_options.append(display_name)
-                    ticker_map[display_name] = full_ticker
+                # Anzeige-Format: "Name (Index) - Ticker"
+                display_name = f"{row[source['name_col']]} ({source['name']}) - {clean_sym}"
+                all_tickers[display_name] = clean_sym
         except:
-            continue
+            continue # Falls eine Quelle offline ist, laden die anderen weiter
 
-    return sorted(list(set(combined_options))), ticker_map
+    # WICHTIG: Manueller "Global Giants" Core als Sicherheitsnetz (Asien Power)
+    core_giants = {
+        "Samsung Electronics (KR) - 005930.KS": "005930.KS",
+        "TSMC (TW) - 2330.TW": "2330.TW",
+        "Tencent (HK) - 0700.HK": "0700.HK",
+        "Alibaba (HK) - 9988.HK": "9988.HK",
+        "Hyundai (KR) - 005380.KS": "005380.KS",
+        "voestalpine (AT) - VOE.VI": "VOE.VI",
+        "Erste Group (AT) - EBS.VI": "EBS.VI",
+        "OMV (AT) - OMV.VI": "OMV.VI"
+    }
+    all_tickers.update(core_giants)
+    
+    return sorted(all_tickers.keys()), all_tickers
 
-# --- UI DESIGN ---
+# --- UI DESIGN (Ares Anthrazit & Gold) ---
 st.set_page_config(page_title="Ares Global Analyst", layout="centered")
 
 st.markdown("""
@@ -83,57 +79,64 @@ st.markdown("""
 st.title("Ares Global")
 
 # --- DATEN LADEN ---
-with st.spinner("Synchronisiere Weltmärkte (USA, Europa, China, HK, Korea, Japan)..."):
-    global_options, global_map = get_global_tickers()
+with st.spinner("Lade globale Marktdaten (GitHub Stable)..."):
+    display_list, ticker_map = get_ares_global_database()
 
-# --- EINGABE ---
-ticker_input = st.text_input("TICKER MANUELL (z.B. 005930.KS für Samsung)", placeholder="Falls Suche nicht genutzt wird...").upper()
+# --- EINGABE-BEREICH ---
+ticker_input = st.text_input("MANUELLER TICKER", placeholder="z.B. MSFT, SAP.DE...").upper()
 
-selected_company = st.selectbox(
-    "WELTWEITE SUCHE (Name, Land oder Index)",
-    options=["-- Starten Sie die Suche --"] + global_options,
-    help="Tippen Sie z.B. 'Samsung', 'Tencent', 'Alibaba', 'Hyundai' oder 'China'."
+selected_from_list = st.selectbox(
+    "GLOBALE SUCHE (S&P500, STOXX600, DAX, ASIEN)",
+    options=["-- Bitte wählen / Suche starten --"] + display_list
 )
 
 final_ticker = ""
-if selected_company != "-- Starten Sie die Suche --":
-    final_ticker = global_map[selected_company]
+if selected_from_list != "-- Bitte wählen / Suche starten --":
+    final_ticker = ticker_map[selected_from_list]
 elif ticker_input:
     final_ticker = ticker_input
 
-anzahl_jahre = st.selectbox("ANALYSE-ZEITRAUM (JAHRE)", options=[1, 2, 3, 4, 5], index=4)
+anzahl_jahre = st.selectbox("ZEITRAUM (JAHRE)", options=[1, 2, 3, 4, 5], index=4)
 
 # --- VERARBEITUNG ---
 if final_ticker:
     try:
-        with st.spinner(f'Analysiere Fundamentaldaten für {final_ticker}...'):
+        with st.spinner(f'Extrahiere Fundamentaldaten für {final_ticker}...'):
             stock = yf.Ticker(final_ticker)
             
-            # Wichtig: Manche asiatischen Firmen nutzen andere Zeitstempel, .financials ist meist am stabilsten
+            # Yahoo Finance Abfrage
             balance = stock.balance_sheet.iloc[:, :anzahl_jahre]
             income = stock.financials.iloc[:, :anzahl_jahre]
             cashflow = stock.cashflow.iloc[:, :anzahl_jahre]
             
             if balance.empty and income.empty:
-                st.error(f"Keine Daten für '{final_ticker}' gefunden. Tipp: Manche China-Aktien sind über Yahoo Finance nur eingeschränkt abrufbar.")
+                st.warning(f"Keine Daten für {final_ticker} gefunden. Prüfen Sie ggf. das Suffix.")
             else:
-                st.subheader(f"Ergebnis für: {final_ticker}")
+                st.subheader(f"Analyse: {final_ticker}")
                 
                 zip_buffer = io.BytesIO()
+                files_added = 0
                 with zipfile.ZipFile(zip_buffer, "w") as zf:
-                    if not balance.empty: zf.writestr(f"{final_ticker}_Bilanz.csv", balance.to_csv())
-                    if not income.empty: zf.writestr(f"{final_ticker}_GuV.csv", income.to_csv())
-                    if not cashflow.empty: zf.writestr(f"{final_ticker}_Cashflow.csv", cashflow.to_csv())
+                    if not balance.empty:
+                        zf.writestr(f"{final_ticker}_Bilanz.csv", balance.to_csv())
+                        files_added += 1
+                    if not income.empty:
+                        zf.writestr(f"{final_ticker}_GuV.csv", income.to_csv())
+                        files_added += 1
+                    if not cashflow.empty:
+                        zf.writestr(f"{final_ticker}_Cashflow.csv", cashflow.to_csv())
+                        files_added += 1
 
-                st.success(f"✓ {final_ticker} erfolgreich extrahiert.")
-                st.download_button(
-                    label=f"🏆 DOWNLOAD: {final_ticker} ANALYSIS ZIP",
-                    data=zip_buffer.getvalue(),
-                    file_name=f"Ares_Global_{final_ticker}.zip",
-                    mime="application/zip"
-                )
+                if files_added > 0:
+                    st.success(f"✓ {files_added} Tabellen erfolgreich generiert.")
+                    st.download_button(
+                        label=f"🏆 DOWNLOAD: {final_ticker} PAKET",
+                        data=zip_buffer.getvalue(),
+                        file_name=f"Ares_{final_ticker}_Data.zip",
+                        mime="application/zip"
+                    )
     except Exception as e:
-        st.error(f"Fehler bei {final_ticker}: {e}")
+        st.error(f"Fehler: {e}")
 
 st.write("---")
-st.caption("Ares 0.3 Global Elite || Powered by TirdyDan")
+st.caption("Ares 0.3 Big Markets || Ares by TirdyDan")

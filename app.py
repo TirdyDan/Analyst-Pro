@@ -5,7 +5,7 @@ import zipfile
 import io
 
 # --- UI DESIGN (Anthrazit & Gold) ---
-st.set_page_config(page_title="Analyst", layout="centered")
+st.set_page_config(page_title="Analyst Version: Ares", layout="centered")
 
 st.markdown("""
     <style>
@@ -87,4 +87,4 @@ if ticker:
         st.error(f"Fehler: {e}")
 
 st.write("---")
-st.caption(f"Free Version | developed by TirdyDan")
+st.caption(f"Free Version Ares || Ares is developed by TirdyDan")

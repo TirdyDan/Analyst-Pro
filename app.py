@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import zipfile
 import io
+import time
 
 # --- HILFSFUNKTIONEN ---
 def get_financial_value(df, possible_keys):
@@ -15,7 +16,7 @@ def get_financial_value(df, possible_keys):
     return None
 
 # --- UI DESIGN ---
-st.set_page_config(page_title="Ares Global Analyst 0.7", layout="centered")
+st.set_page_config(page_title="Ares Global Analyst 0.8", layout="centered")
 
 st.markdown("""
     <style>
@@ -29,19 +30,27 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("Ares 0.7")
+st.title("Ares 0.8")
 
 # --- EINGABE ---
 ticker_sym = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. AAPL, MSFT, SAP.DE, VOE.VI").upper()
 st.markdown('<p class="hint">Verwende zum Beispiel die Google KI Suche um Tickersymbole herauszufinden.</p>', unsafe_allow_html=True)
 
+anzahl_jahre = st.selectbox("ANALYSE-ZEITRAUM (JAHRE ZURÜCK)", options=[1, 2, 3, 4, 5], index=4)
+
 if ticker_sym:
     try:
         with st.spinner(f'Analysiere {ticker_sym}...'):
+            # Wir versuchen die Daten abzurufen
             stock = yf.Ticker(ticker_sym)
-            info = stock.info
             
-            # --- 1. INTERAKTIVER PREIS-CHART ---
+            # --- 1. PREIS-CHART ---
+            info = stock.info
+            if not info or 'shortName' not in info:
+                # Falls Rate Limit zuschlägt, versuchen wir es mit Minimaldaten
+                st.error("Fehler: Too Many Requests (Yahoo Rate Limit). Bitte warte kurz oder versuche einen anderen Ticker.")
+                st.stop()
+
             st.subheader(f"📈 Aktienkurs: {info.get('shortName', ticker_sym)}")
             
             timeframe = st.radio("ZEITRAUM WÄHLEN", ["1T", "1W", "1M", "6M", "1J", "MAX"], horizontal=True, index=4)
@@ -56,16 +65,16 @@ if ticker_sym:
                 fig_price.update_layout(template="plotly_dark", height=350, margin=dict(l=0, r=0, t=0, b=0), xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig_price, use_container_width=True)
 
-            # --- 2. FINANZDATEN LADEN ---
+            # --- 2. FINANZDATEN ---
             income = stock.financials
             balance = stock.balance_sheet
             cashflow = stock.cashflow
             
             if not income.empty and not balance.empty:
                 st.write("---")
-                st.subheader("📊 Fundamental Quick-Check")
+                st.subheader("📊 Fundamental Quick-Check (9 Kennzahlen)")
                 
-                # --- KPI BERECHNUNGEN (GEPRÜFT) ---
+                # Berechnungswerte
                 rev = get_financial_value(income, ['Total Revenue'])
                 net_inc = get_financial_value(income, ['Net Income'])
                 ebitda = get_financial_value(income, ['EBITDA'])
@@ -83,7 +92,6 @@ if ticker_sym:
                 c2.metric("EBITDA-Marge", f"{(ebitda/rev)*100:.2f}%" if rev and ebitda else "N/A")
                 c3.metric("Eigenkapitalrendite", f"{(net_inc/equity)*100:.2f}%" if net_inc and equity else "N/A")
 
-                # KGV & KBV direkt von Yahoo (Sicherste Quelle)
                 c4.metric("KGV (PE Ratio)", info.get('trailingPE', 'N/A'))
                 c5.metric("Liquidität (Ratio)", f"{assets/liabs:.2f}" if assets and liabs else "N/A")
                 c6.metric("Verschuldungsgrad", f"{total_debt/equity:.2f}" if total_debt and equity else "N/A")
@@ -97,34 +105,21 @@ if ticker_sym:
                 c7.metric("Umsatzwachstum", rev_growth)
                 c8.metric("KBV (P/B Ratio)", info.get('priceToBook', 'N/A'))
                 
-                # DIVIDENDE FIX (Plausibilitätscheck: Renditen > 50% werden als Fehler gewertet)
-                div_yield_raw = info.get('dividendYield', 0)
-                if div_yield_raw and div_yield_raw < 0.5: # 0.5 entspricht 50%
-                    div_display = f"{div_yield_raw*100:.2f}%"
-                elif div_yield_raw and div_yield_raw >= 0.5:
-                    div_display = "Datenfehler" # Schutz vor Ausreißern
-                else:
-                    div_display = "0.00%"
+                # Dividende Sicherung
+                div_yield = info.get('dividendYield', 0)
+                div_display = f"{div_yield*100:.2f}%" if div_yield and div_yield < 0.4 else ("0.00%" if not div_yield else "Datenfehler")
                 c9.metric("Dividendenrendite", div_display)
 
-                # --- 3. INTERAKTIVE TREND-GRAFIK (5 JAHRE) ---
+                # --- 3. TREND-GRAFIK ---
                 st.write("---")
-                st.subheader("📉 Historische Trends (Letzte 5 Jahre)")
+                st.subheader("📉 Historische Trends (5 Jahre)")
+                metric_to_plot = st.selectbox("WÄHLE EINE KENNZAHL:", ["Gesamtumsatz", "Reingewinn", "Operativer Cashflow", "EBITDA"])
+                plot_map = {"Gesamtumsatz": 'Total Revenue', "Reingewinn": 'Net Income', "Operativer Cashflow": 'Operating Cash Flow', "EBITDA": 'EBITDA'}
                 
-                metric_to_plot = st.selectbox("WÄHLE EINE KENNZAHL FÜR DEN TREND:", 
-                                            ["Gesamtumsatz", "Reingewinn", "Operativer Cashflow", "EBITDA"])
-                
-                plot_map = {
-                    "Gesamtumsatz": income.loc['Total Revenue'] if 'Total Revenue' in income.index else None,
-                    "Reingewinn": income.loc['Net Income'] if 'Net Income' in income.index else None,
-                    "Operativer Cashflow": cashflow.loc['Operating Cash Flow'] if 'Operating Cash Flow' in cashflow.index else None,
-                    "EBITDA": income.loc['EBITDA'] if 'EBITDA' in income.index else None
-                }
-                
-                data_series = plot_map[metric_to_plot]
-                if data_series is not None:
-                    fig_trend = go.Figure()
-                    fig_trend.add_trace(go.Bar(x=data_series.index.year, y=data_series.values, marker_color='#FFD700', name=metric_to_plot))
+                source_df = cashflow if metric_to_plot == "Operativer Cashflow" else income
+                if plot_map[metric_to_plot] in source_df.index:
+                    data = source_df.loc[plot_map[metric_to_plot]]
+                    fig_trend = go.Figure(go.Bar(x=data.index.year, y=data.values, marker_color='#FFD700'))
                     fig_trend.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=20, b=0))
                     st.plotly_chart(fig_trend, use_container_width=True)
 
@@ -135,27 +130,47 @@ if ticker_sym:
                     zf.writestr(f"{ticker_sym}_Bilanz.csv", balance.to_csv())
                     zf.writestr(f"{ticker_sym}_GuV.csv", income.to_csv())
                     zf.writestr(f"{ticker_sym}_Cashflow.csv", cashflow.to_csv())
+                st.download_button(label=f"🏆 DOWNLOAD {ticker_sym} PAKET", data=zip_buffer.getvalue(), file_name=f"Ares_{ticker_sym}.zip", mime="application/zip")
 
-                st.download_button(label=f"🏆 DOWNLOAD: {ticker_sym} ANALYSE-PAKET", data=zip_buffer.getvalue(), 
-                                 file_name=f"Ares_{ticker_sym}_Full.zip", mime="application/zip")
-            else:
-                st.warning("Keine Finanzdaten für diesen Ticker verfügbar.")
     except Exception as e:
-        st.error(f"Fehler: {e}")
+        if "Too Many Requests" in str(e):
+            st.error("Yahoo Finance blockiert gerade die Anfrage (Rate Limit). Bitte versuche es in 5-10 Minuten erneut.")
+        else:
+            st.error(f"Fehler: {e}")
 
-# --- LEXIKON & WIKIPEDIA (UNTERHALB) ---
-st.write("### 📘 Kennzahlen-Lexikon")
-exp1, exp2 = st.columns(2)
-with exp1:
-    st.markdown("**Gewinnmarge:** Reingewinn/Umsatz. | **EBITDA:** Operativer Gewinn vor Steuern/Abschreibung. | **ROE:** Verzinsung des Eigenkapitals.")
-with exp2:
-    st.markdown("**KGV:** Preis pro 1€ Gewinn. | **Liquidität:** Kurzfr. Zahlungsfähigkeit. | **Debt-to-Equity:** Verschuldungsgrad.")
+# --- VOLLSTÄNDIGES LEXIKON ---
+st.write("---")
+st.write("### 📘 Vollständiges Kennzahlen-Lexikon")
+l_col1, l_col2 = st.columns(2)
+with l_col1:
+    st.markdown("""
+    - **Gewinnmarge:** Welcher Prozentsatz vom Umsatz bleibt als Nettogewinn? (>10% ist gut)
+    - **EBITDA-Marge:** Operative Stärke ohne Steuern und Abschreibungen.
+    - **Eigenkapitalrendite (ROE):** Wie effektiv arbeitet das Geld der Aktionäre? (>15% ist top)
+    - **KGV (PE Ratio):** Bewertung der Aktie. Wie viele Jahresgewinne kostet die Firma?
+    - **Liquidität (Current Ratio):** Kurzfristige Zahlungsfähigkeit. (Ideal > 1.5)
+    """)
+with l_col2:
+    st.markdown("""
+    - **Verschuldungsgrad:** Verhältnis Schulden zu Eigenkapital. (Ideal < 1.0)
+    - **Umsatzwachstum:** Dynamik des Unternehmens im Vergleich zum Vorjahr.
+    - **KBV (P/B Ratio):** Substanzwert. Preis im Vergleich zum Eigenkapital.
+    - **Dividendenrendite:** Jährliche Ausschüttung in Prozent zum Aktienkurs.
+    """)
 
-st.write("### 🔗 Wikipedia-Referenzen")
-links = ["[Gewinnmarge](https://de.wikipedia.org/wiki/Umsatzrendite)", "[KGV](https://de.wikipedia.org/wiki/Kurs-Gewinn-Verh%C3%A4ltnis)", 
-         "[EBITDA](https://de.wikipedia.org/wiki/EBITDA)", "[Liquidität](https://de.wikipedia.org/wiki/Liquidit%C3%A4tsgrad)", 
-         "[ROE](https://de.wikipedia.org/wiki/Eigenkapitalrendite)", "[Verschuldungsgrad](https://de.wikipedia.org/wiki/Verschuldungsgrad)"]
+# --- VOLLSTÄNDIGE LINKS ---
+st.write("### 🔗 Wikipedia-Referenzen (Alle 9)")
+links = [
+    "[Gewinnmarge](https://de.wikipedia.org/wiki/Umsatzrendite)", 
+    "[EBITDA](https://de.wikipedia.org/wiki/EBITDA)", 
+    "[Eigenkapitalrendite](https://de.wikipedia.org/wiki/Eigenkapitalrendite)",
+    "[KGV](https://de.wikipedia.org/wiki/Kurs-Gewinn-Verh%C3%A4ltnis)",
+    "[Liquiditätsgrad](https://de.wikipedia.org/wiki/Liquidit%C3%A4tsgrad)",
+    "[Verschuldungsgrad](https://de.wikipedia.org/wiki/Verschuldungsgrad)",
+    "[Umsatzwachstum](https://de.wikipedia.org/wiki/Wachstumsrate)",
+    "[KBV](https://de.wikipedia.org/wiki/Kurs-Buchwert-Verh%C3%A4ltnis)",
+    "[Dividendenrendite](https://de.wikipedia.org/wiki/Dividendenrendite)"
+]
 st.markdown(" • ".join(links))
 
-st.write("---")
-st.caption("Ares 0.7 || Fokus: Visualisierung & Datenintegrität")
+st.caption("Ares 0.8 || Stabilitäts-Fix & Vollständiges Lexikon")

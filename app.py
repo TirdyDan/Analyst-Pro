@@ -4,8 +4,30 @@ import pandas as pd
 import zipfile
 import io
 
+# --- DATEN-FUNKTION (S&P 500 Liste laden) ---
+@st.cache_data
+def get_sp500_tickers():
+    try:
+        # Lade die S&P 500 Tabelle von Wikipedia
+        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+        table = pd.read_html(url)
+        df = table[0]
+        
+        # Erstelle die Liste im Format "Firmenname - Ticker Symbol"
+        df['Display'] = df['Security'] + " - " + df['Symbol']
+        
+        # Alphabetisch nach Firmenname sortieren
+        list_sorted = sorted(df['Display'].tolist())
+        
+        # Map erstellen, um vom Namen wieder auf den Ticker zu kommen
+        ticker_map = dict(zip(df['Display'], df['Symbol']))
+        
+        return list_sorted, ticker_map
+    except Exception as e:
+        return [], {}
+
 # --- UI DESIGN (Anthrazit & Gold) ---
-st.set_page_config(page_title="Analyst Version: Ares", layout="centered")
+st.set_page_config(page_title="Ares Analyst", layout="centered")
 
 st.markdown("""
     <style>
@@ -14,7 +36,7 @@ st.markdown("""
     h2, h3 { color: #FFD700 !important; }
     
     /* Style für das Dropdown (Selectbox) */
-    .stSelectbox div div {
+    div[data-baseweb="select"] > div {
         background-color: #2d2d2d !important;
         color: #FFD700 !important;
         border: 1px solid #FFD700 !important;
@@ -31,60 +53,76 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("Analyst by TirdyDan")
+st.title("Ares")
+
+# --- DATEN LADEN ---
+sp500_list, sp500_map = get_sp500_tickers()
 
 # --- EINGABE-BEREICH ---
-ticker = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. MSFT, SAP.DE, 6762.T").upper()
+ticker_input = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. MSFT, SAP.DE, 6762.T").upper()
 
-# Das neue Dropdown-Menü
+# S&P 500 HILFE DROPDOWN
+selected_from_list = st.selectbox(
+    "ODER AUS S&P 500 LISTE WÄHLEN (HILFE)",
+    options=["-- Bitte wählen --"] + sp500_list,
+    index=0
+)
+
+# Logik: Welcher Ticker soll verwendet werden?
+# Wenn etwas in der Liste gewählt wurde (und es nicht der Platzhalter ist), nimm das.
+# Sonst nimm die manuelle Eingabe.
+final_ticker = ticker_input
+if selected_from_list != "-- Bitte wählen --":
+    final_ticker = sp500_map[selected_from_list]
+
 anzahl_jahre = st.selectbox(
     "ANALYSE-ZEITRAUM (JAHRE ZURÜCK)",
     options=[1, 2, 3, 4, 5],
     index=4  # Standardmäßig auf 5 Jahre eingestellt
 )
 
-if ticker:
+if final_ticker:
     try:
-        with st.spinner(f'Extrahiere Daten der letzten {anzahl_jahre} Jahre...'):
-            stock = yf.Ticker(ticker)
+        with st.spinner(f'Extrahiere Daten für {final_ticker} der letzten {anzahl_jahre} Jahre...'):
+            stock = yf.Ticker(final_ticker)
             
             # Daten abrufen
-            # .iloc[:, :anzahl_jahre] nimmt die ersten X Spalten (die neuesten Jahre)
             balance = stock.balance_sheet.iloc[:, :anzahl_jahre]
             income = stock.financials.iloc[:, :anzahl_jahre]
             cashflow = stock.cashflow.iloc[:, :anzahl_jahre]
             
-            st.subheader(f"Status: {ticker} | Zeitraum: {anzahl_jahre} Jahr(e)")
-            
-            # --- ZIP ERSTELLUNG ---
-            zip_buffer = io.BytesIO()
-            files_added = 0
-            
-            with zipfile.ZipFile(zip_buffer, "w") as zf:
-                if not balance.empty:
-                    zf.writestr(f"{ticker}_Bilanz_{anzahl_jahre}J.csv", balance.to_csv())
-                    files_added += 1
-                if not income.empty:
-                    zf.writestr(f"{ticker}_GuV_{anzahl_jahre}J.csv", income.to_csv())
-                    files_added += 1
-                if not cashflow.empty:
-                    zf.writestr(f"{ticker}_Cashflow_{anzahl_jahre}J.csv", cashflow.to_csv())
-                    files_added += 1
-
-            if files_added > 0:
-                st.success(f"✓ {files_added} Tabellen für {anzahl_jahre} Jahre generiert.")
-                
-                st.download_button(
-                    label=f"🏆 DATEN-PAKET ({anzahl_jahre} JAHRE) LADEN",
-                    data=zip_buffer.getvalue(),
-                    file_name=f"{ticker}_{anzahl_jahre}Y_Analysis.zip",
-                    mime="application/zip"
-                )
+            if balance.empty and income.empty and cashflow.empty:
+                st.warning(f"Keine Daten für '{final_ticker}' gefunden. (Evtl. Ticker-Symbol prüfen)")
             else:
-                st.warning("Keine historischen Tabellen gefunden. (Krypto/Gold haben oft keine Bilanzen)")
+                st.subheader(f"Status: {final_ticker} | Zeitraum: {anzahl_jahre} Jahr(e)")
+                
+                # --- ZIP ERSTELLUNG ---
+                zip_buffer = io.BytesIO()
+                files_added = 0
+                
+                with zipfile.ZipFile(zip_buffer, "w") as zf:
+                    if not balance.empty:
+                        zf.writestr(f"{final_ticker}_Bilanz_{anzahl_jahre}J.csv", balance.to_csv())
+                        files_added += 1
+                    if not income.empty:
+                        zf.writestr(f"{final_ticker}_GuV_{anzahl_jahre}J.csv", income.to_csv())
+                        files_added += 1
+                    if not cashflow.empty:
+                        zf.writestr(f"{final_ticker}_Cashflow_{anzahl_jahre}J.csv", cashflow.to_csv())
+                        files_added += 1
+
+                if files_added > 0:
+                    st.success(f"✓ {files_added} Tabellen für {anzahl_jahre} Jahre generiert.")
+                    
+                    st.download_button(
+                        label=f"🏆 DATEN-PAKET ({anzahl_jahre} JAHRE) LADEN",
+                        data=zip_buffer.getvalue(),
+                        file_name=f"{final_ticker}_{anzahl_jahre}Y_Analysis.zip",
+                        mime="application/zip"
+                    )
 
     except Exception as e:
         st.error(f"Fehler: {e}")
 
 st.write("---")
-st.caption(f"Free Version Ares || Ares is developed by TirdyDan")
+st.caption(f" Ares 0.1 || Ares by TirdyDan")

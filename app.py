@@ -1,50 +1,13 @@
-import logging
-import io
-import zipfile
-from dataclasses import dataclass
-from datetime import datetime, date
-from math import floor
-from typing import Any, Dict, List, Optional, Tuple
-
-import numpy as np
-import pandas as pd
 import streamlit as st
 import yfinance as yf
+import pandas as pd
 import plotly.graph_objects as go
+import zipfile
+import io
+from math import floor
+from datetime import datetime
 
-# -----------------------------
-# Logging & Config
-# -----------------------------
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("ares_ultra")
-
-CACHE_TTL = 60 * 30 
-DEFAULT_MIN_VOL = 500_000
-
-# -----------------------------
-# Verbesserte Hilfsfunktionen
-# -----------------------------
-@st.cache_data(ttl=CACHE_TTL)
-def get_exchange_rate(from_curr: str, to_curr: str = "EUR") -> float:
-    """Holt den aktuellen Wechselkurs, um Risiko korrekt zu berechnen."""
-    if from_curr == to_curr or from_curr == "N/A":
-        return 1.0
-    try:
-        pair = f"{from_curr}{to_curr}=X"
-        data = yf.Ticker(pair).history(period="1d")
-        if not data.empty:
-            return float(data['Close'].iloc[-1])
-        return 1.0
-    except:
-        return 1.0
-
-def safe_float(x: Any) -> Optional[float]:
-    try:
-        if x is None: return None
-        return float(x)
-    except:
-        return None
-
+# --- HELPER FUNCTIONS ---
 def get_val(df, keys):
     for k in keys:
         if k in df.index:
@@ -52,179 +15,229 @@ def get_val(df, keys):
             if pd.notnull(val): return val
     return None
 
-# -----------------------------
-# ARES Engine (Calculations)
-# -----------------------------
-def calc_atr_pct(df: pd.DataFrame, period: int = 14) -> Optional[float]:
-    if df.empty or len(df) < period: return None
-    high, low, close = df["High"], df["Low"], df["Close"]
-    prev_close = close.shift(1)
-    tr = pd.concat([(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
-    atr = tr.rolling(window=period).mean().iloc[-1]
-    return float(atr / close.iloc[-1] * 100.0)
+@st.cache_data(ttl=1800)
+def get_exchange_rate(from_curr, to_curr="EUR"):
+    if from_curr == to_curr or from_curr == "N/A": return 1.0
+    try:
+        data = yf.Ticker(f"{from_curr}{to_curr}=X").history(period="1d")
+        return float(data['Close'].iloc[-1]) if not data.empty else 1.0
+    except: return 1.0
 
-def calc_max_drawdown(close_series: pd.Series) -> Optional[float]:
-    if close_series.empty: return None
-    pk = close_series.cummax()
-    dd = (close_series / pk) - 1.0
-    return float(abs(dd.min()) * 100.0)
-
-# -----------------------------
-# UI & Design
-# -----------------------------
+# --- UI SETUP ---
 st.set_page_config(page_title="ARES", layout="centered")
-
 st.markdown("""
     <style>
     .stApp { background-color: #1e1e1e; color: #ffffff; }
-    h1, h2, h3 { color: #FFD700 !important; font-family: 'Georgia', serif; }
-    .stButton>button { background-color: #FFD700; color: #000; border-radius: 5px; font-weight: bold; width: 100%; }
-    input { background-color: #2d2d2d !important; color: white !important; border: 1px solid #FFD700 !important; }
-    [data-testid="stMetricValue"] { color: #FFD700 !important; }
-    .status-card { background-color: #2d2d2d; padding: 20px; border-radius: 10px; border-left: 5px solid #FFD700; }
+    h1, h2, h3 { color: #FFD700 !important; font-family: 'Georgia', serif; text-align: center; }
+    .stMetric { background-color: #2d2d2d; padding: 15px; border-radius: 10px; border: 1px solid #FFD700; }
+    [data-testid="stMetricValue"] { color: #FFD700 !important; font-size: 2.2rem !important; font-weight: bold; }
+    .lexikon-box { background-color: #2d2d2d; padding: 20px; border-radius: 10px; border-left: 5px solid #FFD700; margin-bottom: 20px; }
+    .hint { color: #888; font-size: 0.85rem; text-align: center; margin-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("ARES")
 
-# Input Bereich
-col_t, col_m = st.columns([3, 1])
-with col_t:
-    user_ticker = st.text_input("TICKER SYMBOL", placeholder="z.B. NVDA, SAP.DE, VOE.VI").upper()
-    st.caption("Verwende zum Beispiel die Google KI Suche um Tickersymbole herauszufinden.")
-with col_m:
-    market = st.selectbox("Markt", ["USA", "DE", "AT", "CH", "UK", "FR", "CA"])
+# --- INPUT ---
+ticker_input = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. AAPL, NVDA, SAP.DE").upper()
+st.markdown('<p class="hint">Verwende zum Beispiel die Google KI Suche um Tickersymbole herauszufinden.</p>', unsafe_allow_html=True)
 
-# Risiko Einstellungen
-with st.expander("🛡️ RISIKO-PARAMETER ANPASSEN", expanded=False):
+with st.expander("🛡️ RISIKO- & KONTO-EINSTELLUNGEN", expanded=True):
     c1, c2, c3 = st.columns(3)
-    acc_size = c1.number_input("Kontogröße (EUR)", value=10000)
-    risk_p = c2.number_input("Risiko pro Trade (%)", value=1.0)
-    overnight = c3.checkbox("Overnight halten?", value=True)
+    acc_eur = c1.number_input("Kontogröße (EUR)", value=10000, step=500)
+    risk_p = c2.number_input("Risiko pro Trade (%)", value=1.0, step=0.1)
+    overnight = st.selectbox("Position über Nacht halten?", ["Nein", "Ja"], index=1) == "Ja"
 
-# -----------------------------
-# Hauptlogik
-# -----------------------------
-if user_ticker:
-    suffix_map = {"USA": "", "DE": ".DE", "AT": ".VI", "CH": ".SW", "UK": ".L", "FR": ".PA", "CA": ".TO"}
-    ticker = user_ticker if "." in user_ticker else f"{user_ticker}{suffix_map[market]}"
-    
+if ticker_input:
     try:
-        with st.spinner("Analysiere Markt-Daten..."):
-            stock = yf.Ticker(ticker)
+        with st.spinner("Extrahiere Marktdaten..."):
+            stock = yf.Ticker(ticker_input)
             info = stock.info
-            df = stock.history(period="1y")
+            df_price = stock.history(period="1y")
             
-            if df.empty:
-                st.error("Keine Daten gefunden. Bitte Ticker prüfen.")
+            if df_price.empty:
+                st.error("Ticker nicht gefunden. Bitte Symbol prüfen.")
                 st.stop()
 
-            # --- 1. PREIS CHART (+30% Headroom) ---
-            max_p = df['Close'].max()
-            fig = go.Figure(go.Scatter(x=df.index, y=df['Close'], line=dict(color='#FFD700'), fill='tozeroy'))
-            fig.update_yaxes(range=[df['Close'].min()*0.9, max_p*1.3])
-            fig.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=0,b=0))
+            # --- 1. HERO SECTION: AKTIENKURS ---
+            curr_p = df_price['Close'].iloc[-1]
+            prev_p = df_price['Close'].iloc[-2]
+            change = curr_p - prev_p
+            pct_change = (change / prev_p) * 100
+            curr_sym = info.get('currency', 'USD')
+
+            st.write("---")
+            st.metric(label=f"{info.get('shortName', ticker_input)} ({curr_sym})", 
+                      value=f"{curr_p:.2f} {curr_sym}", 
+                      delta=f"{change:.2f} ({pct_change:.2f}%)")
+            
+            # Preis Chart
+            fig = go.Figure(go.Scatter(x=df_price.index, y=df_price['Close'], line=dict(color='#FFD700'), fill='tozeroy', fillcolor='rgba(255, 215, 0, 0.1)'))
+            fig.update_yaxes(range=[df_price['Close'].min()*0.95, curr_p*1.3])
+            fig.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- 2. TRAFFIC LIGHT EVALUATION ---
-            atr = calc_atr_pct(df)
-            mdd = calc_max_drawdown(df['Close'])
-            vol_20d = df['Volume'].tail(20).mean()
-            
-            # Earnings Check
-            earnings_date = None
-            try:
-                cal = stock.calendar
-                if cal is not None and not cal.empty:
-                    earnings_date = cal.iloc[0, 0]
+            # --- 2. TRADE-SAFETY (AMPEL) ---
+            st.subheader("🛡️ Trade-Safety Check")
+            vol_20d = df_price['Volume'].tail(20).mean()
+            earn_date = None
+            try: earn_date = stock.calendar.iloc[0,0]
             except: pass
+            days_to_earn = (earn_date.date() - datetime.now().date()).days if earn_date else None
             
-            days_to_earn = (earnings_date.date() - datetime.now().date()).days if earnings_date else None
-            
-            # Ampel-Logik
+            status = "GRÜN"
             reasons = []
-            color = "GRÜN"
-            
             if days_to_earn is not None and days_to_earn <= (7 if overnight else 3):
-                color = "ROT"
-                reasons.append(f"⚠️ Earnings in {days_to_earn} Tagen! (Event-Risiko)")
-            elif days_to_earn is None:
-                reasons.append("⚪ Keine Earnings-Daten (Vorsicht geboten)")
+                status = "ROT"; reasons.append(f"Earnings-Event in {days_to_earn} Tagen! (Hohes Gap-Risiko)")
+            if vol_20d < 500000:
+                status = "ROT"; reasons.append("Geringe Liquidität (< 500k Vol)")
             
-            if vol_20d < DEFAULT_MIN_VOL:
-                color = "ROT"
-                reasons.append(f"⚠️ Geringe Liquidität (< {DEFAULT_MIN_VOL} Ø Vol)")
-                
-            if mdd > 45:
-                if color != "ROT": color = "GELB"
-                reasons.append("⚠️ Hoher historischer Drawdown (>45%)")
+            if status == "ROT": st.error(f"🔴 STATUS: {status}")
+            else: st.success(f"🟢 STATUS: {status}")
+            for r in reasons: st.write(f"- {r}")
 
-            # Anzeige Ampel
-            if color == "ROT": st.error(f"🔴 STATUS: {color}")
-            elif color == "GELB": st.warning(f"🟡 STATUS: {color}")
-            else: st.success(f"🟢 STATUS: {color}")
-            
-            for r in reasons: st.write(r)
-
-            # --- 3. POSITIONSGRÖSSE (MIT WÄHRUNGS-FIX) ---
+            # --- 3. POSITIONSRECHNER ---
             st.write("---")
-            st.subheader("📏 Positionsrechner")
+            st.subheader("📏 Positions-Kalkulation")
+            ex_rate = get_exchange_rate(curr_sym, "EUR")
+            risk_eur = acc_eur * (risk_p / 100)
+            risk_ticker_curr = risk_eur / ex_rate
             
-            ticker_curr = info.get("currency", "USD")
-            ex_rate = get_exchange_rate(ticker_curr, "EUR") # Umrechnung von Ticker-Währung zu EUR
+            h, l, c = df_price["High"], df_price["Low"], df_price["Close"]
+            tr = pd.concat([(h-l).abs(), (h-c.shift(1)).abs(), (l-c.shift(1)).abs()], axis=1).max(axis=1)
+            atr_val = tr.rolling(14).mean().iloc[-1]
+            stop_pct = (atr_val / curr_p) * 1.5 * 100
+            shares = floor(risk_ticker_curr / (curr_p * stop_pct / 100))
             
-            # Wieviel EUR darf ich verlieren?
-            risk_eur = acc_size * (risk_p / 100)
-            # Wieviel ist das in der Aktien-Währung?
-            risk_in_ticker_curr = risk_eur / ex_rate
-            
-            # Stop-Abstand (Default 1.5 * ATR)
-            stop_dist_pct = (atr * 1.5) if atr else 5.0
-            last_price = df['Close'].iloc[-1]
-            stop_price = last_price * (1 - stop_dist_pct/100)
-            
-            shares = floor(risk_in_ticker_curr / (last_price * stop_dist_pct / 100))
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Stückzahl", f"{shares}")
-            c2.metric("Risiko (€)", f"{risk_eur:.2f} €")
-            c3.metric("Stop-Preis", f"{stop_price:.2f} {ticker_curr}")
-            st.caption(f"Berechnet mit 1.5x ATR-Abstand ({stop_dist_pct:.2f}%) und Wechselkurs 1 {ticker_curr} = {ex_rate:.4f} EUR")
+            c_s1, c_s2, c_s3 = st.columns(3)
+            c_s1.metric("Stückzahl", f"{shares}")
+            c_s2.metric("Stop-Abstand", f"{stop_pct:.2f}%")
+            c_s3.metric("Stop-Preis", f"{(curr_p * (1-stop_pct/100)):.2f} {curr_sym}")
 
-            # --- 4. FUNDAMENTAL QUICK-CHECK ---
+            # --- 4. FUNDAMENTAL CHECK (9 KPIs) ---
             st.write("---")
-            st.subheader("📊 Fundamental Check (Aktuellstes Jahr)")
+            st.subheader("📊 Fundamental-Analyse (9 Kennzahlen)")
             inc = stock.financials
             bal = stock.balance_sheet
+            cf = stock.cashflow
             
             if not inc.empty and not bal.empty:
-                f1, f2, f3 = st.columns(3)
-                rev = get_val(inc, ['Total Revenue'])
-                ni = get_val(inc, ['Net Income'])
-                ebitda = get_val(inc, ['EBITDA'])
-                equity = get_val(bal, ['Stockholders Equity'])
-                debt = get_val(bal, ['Total Debt'])
-                
+                f1,f2,f3 = st.columns(3); f4,f5,f6 = st.columns(3); f7,f8,f9 = st.columns(3)
+                rev = get_val(inc, ['Total Revenue']); ni = get_val(inc, ['Net Income'])
+                ebitda = get_val(inc, ['EBITDA']); eq = get_val(bal, ['Stockholders Equity'])
+                debt = get_val(bal, ['Total Debt']); ca = get_val(bal, ['Total Current Assets'])
+                cl = get_val(bal, ['Total Current Liabilities']); ta = get_val(bal, ['Total Assets'])
+
                 f1.metric("Gewinnmarge", f"{(ni/rev)*100:.2f}%" if rev and ni else "N/A")
-                f2.metric("KGV", info.get('trailingPE', 'N/A'))
-                f3.metric("EK-Rendite", f"{(ni/equity)*100:.2f}%" if ni and equity else "N/A")
-            
-            # --- 5. HISTORISCHE TRENDS (Clean Years) ---
-            st.write("---")
-            st.subheader("📉 Historische Trends")
-            sel_metric = st.selectbox("Trend wählen", ["Total Revenue", "Net Income", "EBITDA"])
-            if sel_metric in inc.index:
-                data = inc.loc[sel_metric]
-                years = [str(d.year) for d in data.index]
-                fig_t = go.Figure(go.Bar(x=years, y=data.values, marker_color='#FFD700'))
-                fig_t.update_layout(template="plotly_dark", height=250, xaxis=dict(type='category'))
+                f2.metric("EBITDA-Marge", f"{(ebitda/rev)*100:.2f}%" if rev and ebitda else "N/A")
+                f3.metric("EK-Rendite", f"{(ni/eq)*100:.2f}%" if ni and eq else "N/A")
+                f4.metric("KGV (PE)", info.get('trailingPE', 'N/A'))
+                f5.metric("Liquidität", f"{(ca/cl):.2f}" if ca and cl else "N/A")
+                f6.metric("Verschuldung", f"{(debt/eq):.2f}" if debt and eq else "N/A")
+                f7.metric("Umsatz-Wachstum", f"{((inc.loc['Total Revenue'].iloc[0]/inc.loc['Total Revenue'].iloc[1])-1)*100:.2f}%" if len(inc.columns)>1 else "N/A")
+                f8.metric("KBV (P/B)", info.get('priceToBook', 'N/A'))
+                f9.metric("Asset Turnover", f"{(rev/ta):.2f}" if rev and ta else "N/A")
+
+                # --- 5. HISTORISCHE TRENDS (CHRONOLOGISCH) ---
+                st.write("---")
+                st.subheader("📉 Historische Trends")
+                
+                
+                
+                trend_options = ["Umsatz", "Reingewinn", "EBITDA", "Eigenkapital", "Gesamtschulden", "Operativer Cashflow"]
+                sel_trend = st.selectbox("Metrik für Zeitverlauf wählen:", trend_options)
+                
+                t_map = {
+                    "Umsatz": inc.loc['Total Revenue'], "Reingewinn": inc.loc['Net Income'],
+                    "EBITDA": inc.loc['EBITDA'], "Eigenkapital": bal.loc['Stockholders Equity'],
+                    "Gesamtschulden": bal.loc['Total Debt'], "Operativer Cashflow": cf.loc['Operating Cash Flow']
+                }
+                
+                plot_data = t_map[sel_trend][::-1] # Chronologische Umkehrung
+                years = [str(d.year) for d in plot_data.index]
+                
+                fig_t = go.Figure(go.Bar(x=years, y=plot_data.values, marker_color='#FFD700'))
+                fig_t.update_layout(template="plotly_dark", height=300, xaxis=dict(type='category'))
                 st.plotly_chart(fig_t, use_container_width=True)
 
-    except Exception as e:
-        st.error(f"Fehler bei der Analyse: {e}")
+                # --- 6. EXPORT ---
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w") as zf:
+                    zf.writestr(f"GuV.csv", inc.to_csv()); zf.writestr(f"Bilanz.csv", bal.to_csv()); zf.writestr(f"Cashflow.csv", cf.to_csv())
+                st.download_button(label="🏆 DOWNLOAD KI-DATEN-PAKET (ZIP)", data=zip_buffer.getvalue(), file_name=f"Ares_Export_{ticker_input}.zip")
 
-# Lexikon & Footer
+    except Exception as e:
+        st.error(f"Fehler: {e}")
+
+# --- DETAILLIERTES KENNZAHLENLEXIKON ---
 st.write("---")
-with st.expander("📘 KENNZAHLEN LEXIKON"):
-    st.write("Gewinnmarge: Effizienz | KGV: Bewertung | EK-Rendite: Rentabilität | ATR: Volatilität")
-st.caption("ARES 0.8 || Risk & Fundamental Integration")
+st.subheader("📘 ARES Kennzahlenlexikon (Detail)")
+
+with st.container():
+    col_lex1, col_lex2 = st.columns(2)
+    
+    with col_lex1:
+        st.markdown("""
+        <div class="lexikon-box">
+        <b>1. Gewinnmarge (Profit Margin)</b><br>
+        <i>Formel: Reingewinn / Gesamtumsatz</i><br>
+        Zeigt, wie viel Prozent vom Umsatz nach Abzug aller Kosten als Reingewinn übrig bleiben. Ein Wert über 10% gilt als solide.
+        </div>
+        <div class="lexikon-box">
+        <b>2. EBITDA-Marge</b><br>
+        <i>Formel: EBITDA / Gesamtumsatz</i><br>
+        Misst die operative Rentabilität vor Zinsen, Steuern und Abschreibungen. Gut geeignet, um Firmen der gleichen Branche weltweit zu vergleichen.
+        </div>
+        <div class="lexikon-box">
+        <b>3. Eigenkapitalrendite (ROE)</b><br>
+        <i>Formel: Reingewinn / Eigenkapital</i><br>
+        Gibt an, wie effektiv das Unternehmen das Geld der Eigentümer verzinst. Werte über 15% deuten auf ein starkes Geschäftsmodell hin.
+        </div>
+        <div class="lexikon-box">
+        <b>4. KGV (Kurs-Gewinn-Verhältnis)</b><br>
+        <i>Formel: Aktienkurs / Gewinn pro Aktie</i><br>
+        Die wichtigste Bewertungskennzahl. Sie sagt aus, das Wievielfache des Jahresgewinns der Markt aktuell für die Aktie zahlt.
+        </div>
+        <div class="lexikon-box">
+        <b>5. Liquidität (Current Ratio)</b><br>
+        <i>Formel: Umlaufvermögen / Kurzfr. Schulden</i><br>
+        Kann die Firma ihre Rechnungen bezahlen? Ein Wert unter 1.0 ist kritisch, ein Wert über 1.5 gilt als sehr sicher.
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_lex2:
+        st.markdown("""
+        <div class="lexikon-box">
+        <b>6. Verschuldungsgrad (Debt-to-Equity)</b><br>
+        <i>Formel: Gesamtschulden / Eigenkapital</i><br>
+        Zeigt die Abhängigkeit von Fremdkapital. Ein Wert über 1.0 bedeutet, dass mehr Schulden als Eigenkapital vorhanden sind.
+        </div>
+        <div class="lexikon-box">
+        <b>7. Umsatz-Wachstum</b><br>
+        <i>Formel: (Umsatz heute / Umsatz Vorjahr) - 1</i><br>
+        Der Motor der Aktie. Steigendes Wachstum ist meist die Voraussetzung für langfristig steigende Kurse.
+        </div>
+        <div class="lexikon-box">
+        <b>8. KBV (Kurs-Buchwert-Verhältnis)</b><br>
+        <i>Formel: Aktienkurs / Buchwert pro Aktie</i><br>
+        Vergleicht den Preis mit dem Substanzwert der Firma. Beliebt bei Value-Investoren, um "Schnäppchen" zu finden.
+        </div>
+        <div class="lexikon-box">
+        <b>9. Asset Turnover (Kapitalumschlag)</b><br>
+        <i>Formel: Umsatz / Gesamtvermögen</i><br>
+        Misst die Effizienz, mit der das Unternehmen seine Vermögenswerte einsetzt, um Umsatz zu generieren. Höhere Werte sind besser.
+        </div>
+        """, unsafe_allow_html=True)
+
+# --- WIKIPEDIA REFERENZEN ---
+st.write("---")
+st.write("### 🔗 Wikipedia-Referenzen")
+wiki_list = [
+    "[Gewinnmarge](https://de.wikipedia.org/wiki/Umsatzrendite)", "[EBITDA](https://de.wikipedia.org/wiki/EBITDA)", 
+    "[ROE](https://de.wikipedia.org/wiki/Eigenkapitalrendite)", "[KGV](https://de.wikipedia.org/wiki/Kurs-Gewinn-Verh%C3%A4ltnis)",
+    "[Liquidität](https://de.wikipedia.org/wiki/Liquidit%C3%A4tsgrad)", "[Verschuldungsgrad](https://de.wikipedia.org/wiki/Verschuldungsgrad)",
+    "[Wachstumsrate](https://de.wikipedia.org/wiki/Wachstumsrate)", "[KBV](https://de.wikipedia.org/wiki/Kurs-Buchwert-Verh%C3%A4ltnis)",
+    "[Kapitalumschlag](https://de.wikipedia.org/wiki/Kapitalumschlagsh%C3%A4ufigkeit)"
+]
+st.markdown(" • ".join(wiki_list))
+st.caption("ARES 0.8.4 || Professional Analysis Engine")

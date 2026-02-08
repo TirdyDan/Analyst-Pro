@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import zipfile
 import io
 
-# --- HILFSFUNKTION FÜR ROBUSTE DATENABFRAGE ---
+# --- HILFSFUNKTIONEN ---
 def get_val(df, keys):
     """Sucht den neuesten Wert aus einer Liste möglicher Keys."""
     for k in keys:
@@ -20,8 +20,8 @@ def get_series(df, keys):
         if k in df.index: return df.loc[k]
     return None
 
-# --- UI DESIGN ---
-st.set_page_config(page_title="Ares Global Analyst 0.8", layout="centered")
+# --- UI DESIGN (ARES Branding) ---
+st.set_page_config(page_title="ARES", layout="centered")
 
 st.markdown("""
     <style>
@@ -35,7 +35,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("Ares 0.8")
+st.title("ARES")
 
 # --- EINGABE ---
 ticker_sym = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. NVDA, AAPL, SAP.DE").upper()
@@ -65,7 +65,6 @@ if ticker_sym:
                 max_p = hist['Close'].max()
                 min_p = hist['Close'].min()
                 fig_p = go.Figure(go.Scatter(x=hist.index, y=hist['Close'], line=dict(color='#FFD700', width=2), fill='tozeroy', fillcolor='rgba(255, 215, 0, 0.1)'))
-                # Skalierung: 30% Puffer oben
                 fig_p.update_yaxes(range=[min_p * 0.95, max_p * 1.3])
                 fig_p.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig_p, use_container_width=True)
@@ -77,9 +76,8 @@ if ticker_sym:
             
             if not income.empty and not balance.empty:
                 st.write("---")
-                st.subheader("📊 Fundamental Quick-Check (Aktuellstes Fiskaljahr)")
+                st.subheader("📊 Fundamental Quick-Check (8 Kennzahlen)")
                 
-                # Rohwerte ziehen
                 rev = get_val(income, ['Total Revenue'])
                 net_inc = get_val(income, ['Net Income'])
                 ebitda = get_val(income, ['EBITDA'])
@@ -90,17 +88,14 @@ if ticker_sym:
 
                 c1,c2,c3 = st.columns(3); c4,c5,c6 = st.columns(3); c7,c8,c9 = st.columns(3)
 
-                # Zeile 1: Profit
                 c1.metric("Gewinnmarge", f"{(net_inc/rev)*100:.2f}%" if rev and net_inc else "N/A")
                 c2.metric("EBITDA-Marge", f"{(ebitda/rev)*100:.2f}%" if rev and ebitda else "N/A")
                 c3.metric("Eigenkapitalrendite", f"{(net_inc/equity)*100:.2f}%" if net_inc and equity else "N/A")
 
-                # Zeile 2: Bewertung & Liquidität
                 c4.metric("KGV (PE Ratio)", info.get('trailingPE', 'N/A'))
                 c5.metric("Liquidität (Ratio)", f"{c_assets/c_liabs:.2f}" if c_assets and c_liabs else "N/A")
                 c6.metric("Verschuldungsgrad", f"{debt/equity:.2f}" if debt and equity else "N/A")
 
-                # Zeile 3: Wachstum & Dividende (KORREKTUR)
                 rev_g = "N/A"
                 if len(income.columns) > 1:
                     r0, r1 = income.loc['Total Revenue'].iloc[0], income.loc['Total Revenue'].iloc[1]
@@ -108,20 +103,12 @@ if ticker_sym:
                 
                 c7.metric("Umsatzwachstum", rev_g)
                 c8.metric("KBV (P/B Ratio)", info.get('priceToBook', 'N/A'))
-                
-                # PRÄZISE DIVIDENDE (z.B. NVDA 0.02%)
-                div_val = info.get('dividendYield')
-                if div_val is not None:
-                    # Yahoo liefert 0.0002 für 0.02%. Wir zeigen 3 Dezimalstellen für Präzision.
-                    c9.metric("Dividendenrendite", f"{div_val*100:.3f}%")
-                else:
-                    c9.metric("Dividendenrendite", "0.000%")
+                c9.write("") # Dividende entfernt
 
-                # --- 3. TREND-GRAFIK (ALLE 9 KENNZAHLEN) ---
+                # --- 3. TREND-GRAFIK (SAUBERE JAHRESACHSE) ---
                 st.write("---")
                 st.subheader("📉 Historische Trends (5 Jahre)")
                 
-                # Mapping für alle 9 Kennzahlen
                 trend_options = [
                     "Gesamtumsatz", "Reingewinn", "EBITDA", 
                     "Eigenkapital", "Gesamtschulden", "Umlaufvermögen", 
@@ -145,8 +132,15 @@ if ticker_sym:
                 data_series = get_series(target_df, keys)
                 
                 if data_series is not None:
-                    fig_t = go.Figure(go.Bar(x=data_series.index.year, y=data_series.values, marker_color='#FFD700'))
-                    fig_t.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=20,b=0))
+                    # Jahre als Kategorien formatieren, um .5 Dezimalstellen zu verhindern
+                    years = [str(date.year) for date in data_series.index]
+                    fig_t = go.Figure(go.Bar(x=years, y=data_series.values, marker_color='#FFD700'))
+                    fig_t.update_layout(
+                        template="plotly_dark", 
+                        height=300, 
+                        margin=dict(l=0,r=0,t=20,b=0),
+                        xaxis=dict(type='category') # Erzwingt saubere Kategorien (Jahreszahlen)
+                    )
                     st.plotly_chart(fig_t, use_container_width=True)
 
                 # --- DOWNLOAD ---
@@ -161,22 +155,21 @@ if ticker_sym:
     except Exception as e:
         st.error(f"Datenfehler: {e}")
 
-# --- VOLLSTÄNDIGES LEXIKON ---
+# --- LEXIKON (AKTUALISIERT) ---
 st.write("---")
 st.write("### 📘 Kennzahlen-Lexikon")
 col_l, col_r = st.columns(2)
 with col_l:
-    st.markdown("- **Gewinnmarge:** Reingewinn/Umsatz. Effizienz-Check.\n- **EBITDA-Marge:** Operative Kraft vor Steuern.\n- **Eigenkapitalrendite:** Verzinsung des Kapitals.\n- **KGV:** Bewertung (Preis pro 1€ Gewinn).\n- **Liquidität:** Kurzfr. Zahlungsfähigkeit.")
+    st.markdown("- **Gewinnmarge:** Reingewinn/Umsatz. Effizienz-Check.\n- **EBITDA-Marge:** Operative Kraft vor Steuern.\n- **Eigenkapitalrendite:** Verzinsung des Kapitals.\n- **KGV:** Bewertung (Preis pro 1€ Gewinn).")
 with col_r:
-    st.markdown("- **Verschuldungsgrad:** Schulden zu Eigenkapital.\n- **Umsatzwachstum:** Dynamik zum Vorjahr.\n- **KBV:** Preis zu Substanzwert.\n- **Dividendenrendite:** Jährliche Bar-Ausschüttung.")
+    st.markdown("- **Liquidität:** Kurzfr. Zahlungsfähigkeit.\n- **Verschuldungsgrad:** Schulden zu Eigenkapital.\n- **Umsatzwachstum:** Dynamik zum Vorjahr.\n- **KBV:** Preis zu Substanzwert.")
 
 st.write("### 🔗 Wikipedia-Referenzen")
 w_links = [
     "[Gewinnmarge](https://de.wikipedia.org/wiki/Umsatzrendite)", "[EBITDA](https://de.wikipedia.org/wiki/EBITDA)", 
     "[Eigenkapitalrendite](https://de.wikipedia.org/wiki/Eigenkapitalrendite)", "[KGV](https://de.wikipedia.org/wiki/Kurs-Gewinn-Verh%C3%A4ltnis)",
     "[Liquidität](https://de.wikipedia.org/wiki/Liquidit%C3%A4tsgrad)", "[Verschuldungsgrad](https://de.wikipedia.org/wiki/Verschuldungsgrad)",
-    "[Umsatzwachstum](https://de.wikipedia.org/wiki/Wachstumsrate)", "[KBV](https://de.wikipedia.org/wiki/Kurs-Buchwert-Verh%C3%A4ltnis)",
-    "[Dividendenrendite](https://de.wikipedia.org/wiki/Dividendenrendite)"
+    "[Umsatzwachstum](https://de.wikipedia.org/wiki/Wachstumsrate)", "[KBV](https://de.wikipedia.org/wiki/Kurs-Buchwert-Verh%C3%A4ltnis)"
 ]
 st.markdown(" • ".join(w_links))
-st.caption("Ares 0.8 || Präzisions-Update & Chart-Scaling")
+st.caption("Ares 0.8 || Fokus: Präzisions-Update & Chart-Scaling")

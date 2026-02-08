@@ -5,7 +5,7 @@ import zipfile
 import io
 
 # --- UI DESIGN (Anthrazit & Gold) ---
-st.set_page_config(page_title="Analyst Pro Chronos", layout="centered")
+st.set_page_config(page_title="Analyst", layout="centered")
 
 st.markdown("""
     <style>
@@ -31,7 +31,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("Financial Analyst Pro")
+st.title("Analyst by TirdyDan")
 
 # --- EINGABE-BEREICH ---
 ticker = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. MSFT, SAP.DE, 6762.T").upper()
@@ -40,7 +40,7 @@ ticker = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. MSFT, SAP.DE,
 anzahl_jahre = st.selectbox(
     "ANALYSE-ZEITRAUM (JAHRE ZURÜCK)",
     options=[1, 2, 3, 4, 5],
-    index=2  # Standardmäßig auf 3 Jahre eingestellt
+    index=4  # Standardmäßig auf 5 Jahre eingestellt
 )
 
 if ticker:
@@ -87,4 +87,4 @@ if ticker:
         st.error(f"Fehler: {e}")
 
 st.write("---")
-st.caption(f"Premium Edition | Fokus: {anzahl_jahre} Jahre Historie")
+st.caption(f"Free Version | developed by TirdyDan")

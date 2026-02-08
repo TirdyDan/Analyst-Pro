@@ -3,27 +3,32 @@ import yfinance as yf
 import pandas as pd
 import zipfile
 import io
+import requests
 
-# --- DATEN-FUNKTION (S&P 500 Liste laden) ---
+# --- DATEN-FUNKTION (S&P 500 Liste robust laden) ---
 @st.cache_data
 def get_sp500_tickers():
     try:
-        # Lade die S&P 500 Tabelle von Wikipedia
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        table = pd.read_html(url)
-        df = table[0]
+        # Ein User-Agent ist wichtig, damit Wikipedia die Anfrage nicht blockiert
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(url, headers=headers)
         
-        # Erstelle die Liste im Format "Firmenname - Ticker Symbol"
+        tables = pd.read_html(response.text)
+        df = tables[0]
+        
+        # Spalten säubern und Format erstellen: "Firmenname - Ticker"
         df['Display'] = df['Security'] + " - " + df['Symbol']
         
-        # Alphabetisch nach Firmenname sortieren
+        # Alphabetisch sortieren
         list_sorted = sorted(df['Display'].tolist())
         
-        # Map erstellen, um vom Namen wieder auf den Ticker zu kommen
+        # Map für die Rückgewinnung des Tickers
         ticker_map = dict(zip(df['Display'], df['Symbol']))
         
         return list_sorted, ticker_map
     except Exception as e:
+        # Fallback, falls Internet/Wikipedia Probleme macht
         return [], {}
 
 # --- UI DESIGN (Anthrazit & Gold) ---
@@ -35,7 +40,7 @@ st.markdown("""
     h1 { color: #FFD700 !important; font-family: 'Georgia', serif; text-align: center; border-bottom: 2px solid #FFD700; padding-bottom: 10px; }
     h2, h3 { color: #FFD700 !important; }
     
-    /* Style für das Dropdown (Selectbox) */
+    /* Style für das Dropdown */
     div[data-baseweb="select"] > div {
         background-color: #2d2d2d !important;
         color: #FFD700 !important;
@@ -53,76 +58,74 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("Ares")
+st.title("A R E S")
 
 # --- DATEN LADEN ---
-sp500_list, sp500_map = get_sp500_tickers()
+sp500_options, sp500_map = get_sp500_tickers()
 
 # --- EINGABE-BEREICH ---
-ticker_input = st.text_input("TICKER SYMBOL EINGEBEN", placeholder="z.B. MSFT, SAP.DE, 6762.T").upper()
+ticker_input = st.text_input("TICKER SYMBOL MANUELL EINGEBEN", placeholder="z.B. MSFT, SAP.DE").upper()
 
-# S&P 500 HILFE DROPDOWN
-selected_from_list = st.selectbox(
-    "ODER AUS S&P 500 LISTE WÄHLEN (HILFE)",
-    options=["-- Bitte wählen --"] + sp500_list,
-    index=0
+# S&P 500 Dropdown mit integrierter Suchfunktion
+selected_company = st.selectbox(
+    "S&P 500 SUCHE (FIRMENNAME EINTIPPEN)",
+    options=["-- Bitte wählen / Suche nutzen --"] + sp500_options,
+    help="Tippe den Namen der Firma ein, um den Ticker zu finden."
 )
 
-# Logik: Welcher Ticker soll verwendet werden?
-# Wenn etwas in der Liste gewählt wurde (und es nicht der Platzhalter ist), nimm das.
-# Sonst nimm die manuelle Eingabe.
-final_ticker = ticker_input
-if selected_from_list != "-- Bitte wählen --":
-    final_ticker = sp500_map[selected_from_list]
+# Welcher Ticker wird genutzt?
+final_ticker = ""
+if selected_company != "-- Bitte wählen / Suche nutzen --":
+    final_ticker = sp500_map[selected_company]
+elif ticker_input:
+    final_ticker = ticker_input
 
 anzahl_jahre = st.selectbox(
     "ANALYSE-ZEITRAUM (JAHRE ZURÜCK)",
     options=[1, 2, 3, 4, 5],
-    index=4  # Standardmäßig auf 5 Jahre eingestellt
+    index=4
 )
 
+# --- VERARBEITUNG ---
 if final_ticker:
     try:
-        with st.spinner(f'Extrahiere Daten für {final_ticker} der letzten {anzahl_jahre} Jahre...'):
+        with st.spinner(f'Extrahiere Daten für {final_ticker}...'):
             stock = yf.Ticker(final_ticker)
             
-            # Daten abrufen
+            # Daten abrufen (iloc sorgt für die zeitliche Begrenzung)
             balance = stock.balance_sheet.iloc[:, :anzahl_jahre]
             income = stock.financials.iloc[:, :anzahl_jahre]
             cashflow = stock.cashflow.iloc[:, :anzahl_jahre]
             
-            if balance.empty and income.empty and cashflow.empty:
-                st.warning(f"Keine Daten für '{final_ticker}' gefunden. (Evtl. Ticker-Symbol prüfen)")
+            if balance.empty and income.empty:
+                st.warning(f"Keine Finanzdaten für '{final_ticker}' gefunden.")
             else:
-                st.subheader(f"Status: {final_ticker} | Zeitraum: {anzahl_jahre} Jahr(e)")
+                st.subheader(f"Status: {final_ticker}")
                 
-                # --- ZIP ERSTELLUNG ---
+                # ZIP erstellen
                 zip_buffer = io.BytesIO()
                 files_added = 0
-                
                 with zipfile.ZipFile(zip_buffer, "w") as zf:
                     if not balance.empty:
-                        zf.writestr(f"{final_ticker}_Bilanz_{anzahl_jahre}J.csv", balance.to_csv())
+                        zf.writestr(f"{final_ticker}_Bilanz.csv", balance.to_csv())
                         files_added += 1
                     if not income.empty:
-                        zf.writestr(f"{final_ticker}_GuV_{anzahl_jahre}J.csv", income.to_csv())
+                        zf.writestr(f"{final_ticker}_GuV.csv", income.to_csv())
                         files_added += 1
                     if not cashflow.empty:
-                        zf.writestr(f"{final_ticker}_Cashflow_{anzahl_jahre}J.csv", cashflow.to_csv())
+                        zf.writestr(f"{final_ticker}_Cashflow.csv", cashflow.to_csv())
                         files_added += 1
 
                 if files_added > 0:
-                    st.success(f"✓ {files_added} Tabellen für {anzahl_jahre} Jahre generiert.")
-                    
+                    st.success(f"✓ {files_added} Dateien bereit.")
                     st.download_button(
-                        label=f"🏆 DATEN-PAKET ({anzahl_jahre} JAHRE) LADEN",
+                        label=f"🏆 DATEN-PAKET FÜR {final_ticker} LADEN",
                         data=zip_buffer.getvalue(),
-                        file_name=f"{final_ticker}_{anzahl_jahre}Y_Analysis.zip",
+                        file_name=f"{final_ticker}_Analyse.zip",
                         mime="application/zip"
                     )
-
     except Exception as e:
-        st.error(f"Fehler: {e}")
+        st.error(f"Fehler bei der Abfrage: {e}")
 
 st.write("---")
-st.caption(f" Ares 0.1 || Ares by TirdyDan")
+st.caption("Ares 0.2 || Ares by TirdyDan")

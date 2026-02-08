@@ -5,148 +5,135 @@ import zipfile
 import io
 import requests
 
-# --- DATEN-FUNKTION (S&P 500 Liste von stabilen Quellen laden) ---
-@st.cache_data(ttl=86400) # Cache für 24 Stunden
-def get_sp500_tickers():
-    # Primäre Quelle: GitHub (sehr stabil für CSV-Daten)
-    urls = [
-        "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv",
-        "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
-    ]
+# --- GLOBALE DATEN-FUNKTION (Update: Jetzt mit Asien-Fokus) ---
+@st.cache_data(ttl=86400)
+def get_global_tickers():
+    combined_options = []
+    ticker_map = {}
     
-    for url in urls:
-        try:
-            df = pd.read_csv(url)
-            # Spaltennamen normalisieren (manche Quellen nutzen 'Name', andere 'Security')
-            name_col = 'Security' if 'Security' in df.columns else 'Name'
-            
-            # Format: Firmenname - Ticker
-            df['Display'] = df[name_col] + " - " + df['Symbol']
-            
-            list_sorted = sorted(df['Display'].tolist())
-            ticker_map = dict(zip(df['Display'], df['Symbol']))
-            return list_sorted, ticker_map
-        except Exception:
-            continue
-            
-    # Letzter Fallback: Wikipedia mit Browser-Simulation
-    try:
-        url_wiki = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url_wiki, headers=headers, timeout=5)
-        df_wiki = pd.read_html(response.text)[0]
-        df_wiki['Display'] = df_wiki['Security'] + " - " + df_wiki['Symbol']
-        return sorted(df_wiki['Display'].tolist()), dict(zip(df_wiki['Display'], df_wiki['Symbol']))
-    except:
-        return [], {}
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    # Erweiterte Liste der Indizes für maximale Abdeckung
+    sources = [
+        {"name": "S&P 500 (USA)", "url": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", "suffix": ""},
+        {"name": "DAX (DE)", "url": "https://en.wikipedia.org/wiki/DAX", "suffix": ".DE"},
+        {"name": "ATX (AT)", "url": "https://en.wikipedia.org/wiki/Austrian_Traded_Index", "suffix": ".VI"},
+        {"name": "STOXX 600 (EU)", "url": "https://en.wikipedia.org/wiki/STOXX_Europe_600", "suffix": ""},
+        {"name": "Nikkei 225 (JP)", "url": "https://en.wikipedia.org/wiki/Nikkei_225", "suffix": ".T"},
+        {"name": "KOSPI 200 (KR)", "url": "https://en.wikipedia.org/wiki/KOSPI_200", "suffix": ".KS"},
+        {"name": "Hang Seng (HK)", "url": "https://en.wikipedia.org/wiki/Hang_Seng_Index", "suffix": ".HK"},
+        {"name": "SSE 50 (CN)", "url": "https://en.wikipedia.org/wiki/SSE_50_Index", "suffix": ".SS"}
+    ]
 
-# --- UI DESIGN (Anthrazit & Gold) ---
-st.set_page_config(page_title="Ares Analyst", layout="centered")
+    for source in sources:
+        try:
+            response = requests.get(source["url"], headers=headers, timeout=10)
+            tables = pd.read_html(response.text)
+            
+            # Suche nach der Tabelle, die Symbole enthält
+            df = None
+            for t in tables:
+                cols = [str(c).lower() for c in t.columns]
+                if any(x in cols for x in ['symbol', 'ticker', 'code']):
+                    df = t
+                    break
+            
+            if df is not None:
+                # Spaltennamen identifizieren
+                cols_lower = [str(c).lower() for c in df.columns]
+                sym_idx = next(i for i, c in enumerate(cols_lower) if any(x in c for x in ['symbol', 'ticker', 'code']))
+                name_idx = next(i for i, c in enumerate(cols_lower) if any(x in c for x in ['security', 'company', 'name', 'constituent']))
+                
+                for _, row in df.iterrows():
+                    name = str(row.iloc[name_idx])
+                    sym = str(row.iloc[sym_idx]).split()[0] # Falls Leerzeichen im Ticker sind
+                    
+                    # Bereinigung für Yahoo Finance
+                    sym = sym.replace('.', '-') 
+                    
+                    # Suffix-Logik
+                    if source["suffix"] and not sym.endswith(source["suffix"]):
+                        # Spezialfall China/HK: Manchmal sind Ticker dort rein numerisch
+                        full_ticker = f"{sym}{source['suffix']}"
+                    else:
+                        full_ticker = sym
+                    
+                    # Formatierung für die Liste
+                    display_name = f"{name} ({source['name']}) - {full_ticker}"
+                    combined_options.append(display_name)
+                    ticker_map[display_name] = full_ticker
+        except:
+            continue
+
+    return sorted(list(set(combined_options))), ticker_map
+
+# --- UI DESIGN ---
+st.set_page_config(page_title="Ares Global Analyst", layout="centered")
 
 st.markdown("""
     <style>
     .stApp { background-color: #1e1e1e; color: #ffffff; }
     h1 { color: #FFD700 !important; font-family: 'Georgia', serif; text-align: center; border-bottom: 2px solid #FFD700; padding-bottom: 10px; }
-    h2, h3 { color: #FFD700 !important; }
-    
-    /* Style für das Dropdown */
-    div[data-baseweb="select"] > div {
-        background-color: #2d2d2d !important;
-        color: #FFD700 !important;
-        border: 1px solid #FFD700 !important;
-    }
-    
-    /* Farbe der Suchergebnisse im Dropdown */
-    div[data-baseweb="popover"] ul {
-        background-color: #2d2d2d !important;
-        color: #FFD700 !important;
-    }
-
-    .stButton>button {
-        background-color: #FFD700; color: #000000;
-        border-radius: 5px; border: none; width: 100%;
-        font-weight: bold; height: 3.5em;
-    }
-    .stButton>button:hover { background-color: #e6c200; box-shadow: 0px 0px 15px rgba(255, 215, 0, 0.4); }
-    
+    div[data-baseweb="select"] > div { background-color: #2d2d2d !important; color: #FFD700 !important; border: 1px solid #FFD700 !important; }
+    .stButton>button { background-color: #FFD700; color: #000000; border-radius: 5px; font-weight: bold; width: 100%; height: 3.5em; }
     input { background-color: #2d2d2d !important; color: white !important; border: 1px solid #FFD700 !important; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("A R E S")
+st.title("Ares Global")
 
 # --- DATEN LADEN ---
-with st.spinner("Lade S&P 500 Liste..."):
-    sp500_options, sp500_map = get_sp500_tickers()
+with st.spinner("Synchronisiere Weltmärkte (USA, Europa, China, HK, Korea, Japan)..."):
+    global_options, global_map = get_global_tickers()
 
-# --- EINGABE-BEREICH ---
-ticker_input = st.text_input("1. TICKER MANUELL (z.B. AAPL oder SAP.DE)", placeholder="Eingeben...").upper()
+# --- EINGABE ---
+ticker_input = st.text_input("TICKER MANUELL (z.B. 005930.KS für Samsung)", placeholder="Falls Suche nicht genutzt wird...").upper()
 
-# S&P 500 SUCHE
-if sp500_options:
-    selected_company = st.selectbox(
-        "2. S&P 500 SUCHE (Tippe hier den Firmennamen ein)",
-        options=["-- Bitte wählen / Suche nutzen --"] + sp500_options,
-        index=0,
-        help="Hier klicken und einfach den Namen (z.B. Microsoft) tippen."
-    )
-else:
-    st.error("S&P 500 Liste konnte nicht geladen werden. Bitte manuell eingeben.")
-    selected_company = "-- Bitte wählen / Suche nutzen --"
+selected_company = st.selectbox(
+    "WELTWEITE SUCHE (Name, Land oder Index)",
+    options=["-- Starten Sie die Suche --"] + global_options,
+    help="Tippen Sie z.B. 'Samsung', 'Tencent', 'Alibaba', 'Hyundai' oder 'China'."
+)
 
-# Ticker-Logik
 final_ticker = ""
-if selected_company != "-- Bitte wählen / Suche nutzen --":
-    final_ticker = sp500_map[selected_company]
+if selected_company != "-- Starten Sie die Suche --":
+    final_ticker = global_map[selected_company]
 elif ticker_input:
     final_ticker = ticker_input
 
-anzahl_jahre = st.selectbox(
-    "3. ANALYSE-ZEITRAUM (JAHRE)",
-    options=[1, 2, 3, 4, 5],
-    index=4
-)
+anzahl_jahre = st.selectbox("ANALYSE-ZEITRAUM (JAHRE)", options=[1, 2, 3, 4, 5], index=4)
 
 # --- VERARBEITUNG ---
 if final_ticker:
     try:
-        with st.spinner(f'Analysiere {final_ticker}...'):
+        with st.spinner(f'Analysiere Fundamentaldaten für {final_ticker}...'):
             stock = yf.Ticker(final_ticker)
             
-            # Daten abrufen
+            # Wichtig: Manche asiatischen Firmen nutzen andere Zeitstempel, .financials ist meist am stabilsten
             balance = stock.balance_sheet.iloc[:, :anzahl_jahre]
             income = stock.financials.iloc[:, :anzahl_jahre]
             cashflow = stock.cashflow.iloc[:, :anzahl_jahre]
             
             if balance.empty and income.empty:
-                st.warning(f"Keine Finanzdaten für '{final_ticker}' gefunden.")
+                st.error(f"Keine Daten für '{final_ticker}' gefunden. Tipp: Manche China-Aktien sind über Yahoo Finance nur eingeschränkt abrufbar.")
             else:
-                st.subheader(f"Status: {final_ticker}")
+                st.subheader(f"Ergebnis für: {final_ticker}")
                 
-                # ZIP erstellen
                 zip_buffer = io.BytesIO()
-                files_added = 0
                 with zipfile.ZipFile(zip_buffer, "w") as zf:
-                    if not balance.empty:
-                        zf.writestr(f"{final_ticker}_Bilanz.csv", balance.to_csv())
-                        files_added += 1
-                    if not income.empty:
-                        zf.writestr(f"{final_ticker}_GuV.csv", income.to_csv())
-                        files_added += 1
-                    if not cashflow.empty:
-                        zf.writestr(f"{final_ticker}_Cashflow.csv", cashflow.to_csv())
-                        files_added += 1
+                    if not balance.empty: zf.writestr(f"{final_ticker}_Bilanz.csv", balance.to_csv())
+                    if not income.empty: zf.writestr(f"{final_ticker}_GuV.csv", income.to_csv())
+                    if not cashflow.empty: zf.writestr(f"{final_ticker}_Cashflow.csv", cashflow.to_csv())
 
-                if files_added > 0:
-                    st.success(f"✓ {files_added} Tabellen erstellt.")
-                    st.download_button(
-                        label=f"🏆 DATEN-PAKET FÜR {final_ticker} LADEN",
-                        data=zip_buffer.getvalue(),
-                        file_name=f"{final_ticker}_Analyse.zip",
-                        mime="application/zip"
-                    )
+                st.success(f"✓ {final_ticker} erfolgreich extrahiert.")
+                st.download_button(
+                    label=f"🏆 DOWNLOAD: {final_ticker} ANALYSIS ZIP",
+                    data=zip_buffer.getvalue(),
+                    file_name=f"Ares_Global_{final_ticker}.zip",
+                    mime="application/zip"
+                )
     except Exception as e:
-        st.error(f"Fehler: {e}")
+        st.error(f"Fehler bei {final_ticker}: {e}")
 
 st.write("---")
-st.caption("Ares 0.2 || Ares by TirdyDan")
+st.caption("Ares 0.3 Global Elite || Powered by TirdyDan")
